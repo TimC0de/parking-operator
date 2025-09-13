@@ -179,7 +179,7 @@ const ChatInterface: React.FC = () => {
   };
 
   return (
-    <Container maxW="4xl" h="100vh" p={0}>
+    <Container maxW="4xl" h="90vh" p={0}>
       <Flex direction="column" h="full">
         {/* Header */}
         <Box
