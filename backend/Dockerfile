@@ -11,10 +11,13 @@ RUN apt-get update && \
     apt-get install -y gcc && \
     apt-get install -y build-essential libcairo2-dev libpango1.0-dev libgdk-pixbuf-xlib-2.0-dev libffi-dev libxml2 libxslt1.1 && \
     apt-get install -y weasyprint python3-cairocffi && \
+    apt-get install -y sqlite3 && \
     pip install pipenv
 
 # Copy the Pipfiles only to cache dependencies
 COPY Pipfile Pipfile.lock ./
+
+COPY db/* ./
 
 # Install dependencies in the system python environment
 RUN PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy --system
