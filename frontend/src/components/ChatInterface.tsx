@@ -9,25 +9,26 @@ import {
   Flex,
   Avatar,
   IconButton,
-  Spinner,
+  Spinner, Button,
 } from '@chakra-ui/react';
 import {LuMic, LuSearch} from 'react-icons/lu';
 import { api } from '../utils/api';
-
-import "react-use-audio-recorder/dist/index.css";
-import { useAudioRecorder } from "react-use-audio-recorder";
-
-
-interface Message {
-  id: string;
-  text: string;
-  isUser: boolean;
-  timestamp: Date;
-}
+import axios from 'axios';
+//
+// import "react-use-audio-recorder/dist/index.css";
+import VoiceMessageComponent from "./VoiceMessageComponent.tsx";
 
 enum RequestType {
   TEXT_REQUEST = "TEXT_REQUEST",
   VOICE_REQUEST = "VOICE_REQUEST"
+}
+
+interface Message {
+  id: string;
+  type: RequestType;
+  value: string | Blob;
+  isUser: boolean;
+  timestamp: Date;
 }
 
 const ChatInterface: React.FC = () => {
@@ -36,12 +37,11 @@ const ChatInterface: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const {
-    recordingStatus,
-    startRecording,
-    stopRecording,
-  } = useAudioRecorder();
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isChatFinished, setIsChatFinished] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
 
   const bgColor = ['gray.50', 'gray.800'];
   const messageBg = ['white', 'gray.600'];
@@ -53,6 +53,57 @@ const ChatInterface: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      chunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: 'audio/wav' });
+        setAudioBlob(blob);
+        stream.getTracks().forEach(track => track.stop());
+
+        console.log('Recorded...');
+        sendMessage(RequestType.VOICE_REQUEST, blob);
+      };
+
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Error accessing microphone:', error);
+      alert('Could not access microphone. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const createNewChat = () => {
+    setMessages([]);
+    setInputValue('');
+    setError(null);
+    setIsChatFinished(false);
+  }
+
+  const closeConversation = async () => {
+    try {
+      await api.post('/api/resolve/close');
+    } catch (err) {
+      console.error('Error closing conversation:', err);
+    }
+  }
+
   const sendMessage = async (
       request_type: RequestType,
       request_value: string | Blob,
@@ -61,7 +112,8 @@ const ChatInterface: React.FC = () => {
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      text: inputValue.trim(),
+      type: request_type,
+      value: typeof request_value === 'string' ? request_value.trim() : request_value,
       isUser: true,
       timestamp: new Date(),
     };
@@ -92,17 +144,24 @@ const ChatInterface: React.FC = () => {
 
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: result.data.response! || "I'm sorry, I couldn't generate a response.",
+        type: RequestType.TEXT_REQUEST,
+        value: result.data.response! || "I'm sorry, I couldn't generate a response.",
         isUser: false,
         timestamp: new Date(),
       };
 
       setMessages(prev => [...prev, botMessage]);
+
+      if (result.data.is_finished) {
+        setIsChatFinished(true);
+        await closeConversation();
+      }
     } catch (err) {
       console.error('Error calling endpoint:', err);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: "Sorry, I encountered an error while processing your message.",
+        type: RequestType.TEXT_REQUEST,
+        value: "Sorry, I encountered an error while processing your message.",
         isUser: false,
         timestamp: new Date(),
       };
@@ -132,7 +191,7 @@ const ChatInterface: React.FC = () => {
         >
           <HStack justify="space-between">
             <Text fontSize="lg" fontWeight="bold">
-              Parking Assistant Chat
+              Parking Operator Chat
             </Text>
             <HStack>
               <Box
@@ -164,7 +223,7 @@ const ChatInterface: React.FC = () => {
             {messages.length === 0 && !isLoading && (
               <Box textAlign="center" py={8}>
                 <Text color="gray.500" fontSize="lg">
-                  Welcome to Parking Assistant! 🚗
+                  Welcome to Parking Operator! 🚗
                 </Text>
                 <Text color="gray.400" fontSize="sm" mt={2}>
                   Ask me anything about parking regulations, rates, or finding parking spots.
@@ -180,7 +239,7 @@ const ChatInterface: React.FC = () => {
                 spacing={3}
               >
                 {/*{!message.isUser && (*/}
-                {/*  <Avatar size="sm" name="Assistant" bg="blue.500" />*/}
+                {/*  <Avatar size="sm" name="Operator" bg="blue.500" />*/}
                 {/*)}*/}
 
                 <Box
@@ -193,7 +252,9 @@ const ChatInterface: React.FC = () => {
                   borderBottomRightRadius={message.isUser ? 'sm' : 'lg'}
                   shadow="sm"
                 >
-                  <Text>{message.text}</Text>
+                  {message.type === RequestType.TEXT_REQUEST && (<Text>{message.value}</Text>)}
+                  {message.type === RequestType.VOICE_REQUEST && (<VoiceMessageComponent audioBlob={message.value} />)}
+
                   <Text
                     fontSize="xs"
                     opacity={0.7}
@@ -211,7 +272,7 @@ const ChatInterface: React.FC = () => {
 
             {isLoading && (
               <HStack align="start" spacing={3}>
-                {/* <Avatar size="sm" name="Assistant" bg="blue.500" /> */}
+                {/* <Avatar size="sm" name="Operator" bg="blue.500" /> */}
                 <Box
                   bg="white"
                   p={3}
@@ -227,18 +288,24 @@ const ChatInterface: React.FC = () => {
               </HStack>
             )}
 
+            {isChatFinished && (
+                <Box textAlign="center" py={4}>
+                    <Text color="gray.500" fontSize="md" mb={2}>
+                      The chat has ended. Start a new conversation?
+                    </Text>
+                    <Button
+                      aria-label="New Chat"
+                      onClick={createNewChat}
+                      color="white"
+                    >
+                      New Chat
+                    </Button>
+                </Box>
+            )}
+
             <div ref={messagesEndRef} />
           </VStack>
         </Box>
-
-        {/*<AudioRecorder*/}
-        {/*  onRecordingComplete={(blob) => sendMessage(RequestType.VOICE_REQUEST, blob)}*/}
-        {/*  audioTrackConstraints={{*/}
-        {/*    noiseSuppression: true,*/}
-        {/*    echoCancellation: true,*/}
-        {/*  }}*/}
-        {/*  downloadOnSavePress={false}*/}
-        {/*/>*/}
 
         {/* Input Area */}
         <Box
@@ -272,7 +339,7 @@ const ChatInterface: React.FC = () => {
               <LuSearch color="white"/>
             </IconButton>
 
-            {(!recordingStatus || recordingStatus === "stopped") && (
+            {!isRecording && (
               <IconButton
                   aria-label="Start Recording"
                   size="md"
@@ -282,16 +349,11 @@ const ChatInterface: React.FC = () => {
               </IconButton>
             )}
 
-            {recordingStatus === "recording" && (
+            {isRecording && (
               <IconButton
                   aria-label="Start Recording"
                   size="md"
-                  onClick={() => {
-                    stopRecording((blob) => {
-                      console.log("Recorded...");
-                      sendMessage(RequestType.VOICE_REQUEST, blob!);
-                    });
-                  }}
+                  onClick={stopRecording}
               >
                 <LuMic color="red" />
               </IconButton>

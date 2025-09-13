@@ -25,7 +25,7 @@ setup_logging()
 
 #  Define the app (this should be readed from another file)
 app = FastAPI(
-    title="Parking Assistant Backend",
+    title="Parking Operator Backend",
     version="0.0.1",
     docs_url="/docs",
     openapi_url="/api/docs/openapi.json",

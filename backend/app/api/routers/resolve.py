@@ -95,6 +95,7 @@ def chat_with_openai(messages, client, model='gpt-4o'):
         )
 
         response_message = response.choices[0].message
+        is_tool_executed = False
 
         if response_message.tool_calls:
             messages.append(response_message)
@@ -110,9 +111,11 @@ def chat_with_openai(messages, client, model='gpt-4o'):
                             f"Error: Function {function_name} not implemented."
                         )
                     )
+                else:
+                    result = tool_functions[function_name](**args)
+                    messages.append(create_message(tool_call, str(result)))
 
-                result = tool_functions[function_name](**args)
-                messages.append(create_message(tool_call, str(result)))
+                    is_tool_executed = True
 
             second_response = client.chat.completions.create(
                 model=model,
@@ -120,12 +123,21 @@ def chat_with_openai(messages, client, model='gpt-4o'):
                 tools=tools,
                 tool_choice='auto'
             )
-            return second_response.choices[0].message.content
+            return {
+                "response": second_response.choices[0].message.content,
+                "is_finished": is_tool_executed
+            }
         else:
-            return response_message.content
+            return {
+                "response": response_message.content,
+                "is_finished": is_tool_executed
+            }
 
     except Exception as e:
-        return f"Error: {e}"
+        return {
+            "response": f"Encountered technical errors. Please contact the helpdesk.",
+            "is_finished": True
+        }
 
 
 @router.post(
@@ -159,13 +171,21 @@ async def resolve(
     messages = [{"role": "system", "content": system_prompt}, *conversation_history]
 
     # Get response using the chat function
-    response: str = chat_with_openai(
+    response: dict = chat_with_openai(
         messages,
         client,
         config.env_param('OPENAI_MODEL')
     )
 
     # Add assistant response to history
-    conversation_history.append({"role": "assistant", "content": response})
+    conversation_history.append({"role": "assistant", "content": response["response"]})
 
-    return {"response": response}
+    return response
+
+
+@router.post(
+    "/close",
+)
+def close_conversation():
+    conversation_history.clear()
+    return {"status": "Conversation history cleared."}
