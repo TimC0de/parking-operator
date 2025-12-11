@@ -1,5 +1,5 @@
 # Stage 1: Build environment
-FROM python:3.12-slim AS builder
+FROM --platform=linux/arm64/v8 python:3.12-slim AS builder
 WORKDIR /app
 
 # Set environment variables

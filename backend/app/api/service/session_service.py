@@ -57,6 +57,13 @@ class SessionService:
                 entry_station
             )
 
+            logger.info('Parameters - license_plate: {}, entry_time_interval: {}, entry_station: {}'.format(
+                license_plate,
+                entry_time_interval,
+                entry_station
+            ))
+            logger.info('Result from repository: {}'.format(result))
+
             if isinstance(result, list):
                 if len(result) > 1:
                     closest_session = self._get_closest_license_plate(

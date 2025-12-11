@@ -21,6 +21,11 @@ python-jose = "*"
 dateparser = "*"
 python-dateutil = "*"
 openai = "*"
+transformers = "*"
+torch = "*"
+soundfile = "*"
+torchvision = "*"
+torchaudio = "*"
 
 [dev-packages]
 

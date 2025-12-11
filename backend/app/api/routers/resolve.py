@@ -1,12 +1,21 @@
 import json
 import os
 import sqlite3
+from pathlib import Path
 
+import numpy as np
 from app.config.logging import logging
 from enum import Enum
 from typing import Union, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form
+from pydantic import BaseModel
+from starlette.responses import FileResponse
+
+from transformers import pipeline
+import soundfile as sf
+
+import config
 
 from app.core.document import BaseDocumentProcessor, get_document_processor
 from app.core.audio import AudioTranscriber, get_transcriber
@@ -69,11 +78,24 @@ class RequestType(Enum):
     VOICE_REQUEST = "VOICE_REQUEST"
 
 
+class ResolveResponse(BaseModel):
+    text: str
+    is_finished: bool = False
+    is_audio: bool = False
+    audio_path: Optional[str] = None
+
+
 tool_functions = {
     lost_ticket_tool_name: LostTicketTool().execute,
     customer_payment_failed_tool_name: CustomerPaymentFailedTool().execute,
     invalid_license_plate_tool_name: InvalidLicensePlateTool().execute
 }
+
+synthesizer = pipeline(
+    task="text-to-speech",
+    model="suno/bark-small",
+    token=os.environ['HUGGINGFACE_API_KEY']
+)
 
 
 def create_message(tool_call, message):
@@ -85,7 +107,24 @@ def create_message(tool_call, message):
     }
 
 
-def chat_with_openai(messages, client, model='gpt-4o'):
+def synthesize_response_voice(response: ResolveResponse, output_path: str = "output.wav"):
+    audio_array = synthesizer(response.text)
+
+    audio_data = audio_array["audio"]
+    sampling_rate = audio_array["sampling_rate"]
+
+    full_output_path = f'uploads/output/{output_path}'
+    sf.write(
+        full_output_path,
+        np.ravel(audio_data),
+        samplerate=sampling_rate
+    )
+
+    response.audio_path = full_output_path
+    response.is_audio = True
+
+
+def chat_with_openai(messages, client, model='gpt-4o') -> ResolveResponse:
     try:
         response = client.chat.completions.create(
             model=model,
@@ -123,21 +162,21 @@ def chat_with_openai(messages, client, model='gpt-4o'):
                 tools=tools,
                 tool_choice='auto'
             )
-            return {
-                "response": second_response.choices[0].message.content,
+            return ResolveResponse.model_validate({
+                "text": second_response.choices[0].message.content,
                 "is_finished": is_tool_executed
-            }
+            })
         else:
-            return {
-                "response": response_message.content,
+            return ResolveResponse.model_validate({
+                "text": response_message.content,
                 "is_finished": is_tool_executed
-            }
+            })
 
     except Exception as e:
-        return {
-            "response": f"Encountered technical errors. Please contact the helpdesk.",
+        return ResolveResponse.model_validate({
+            "text": f"Encountered technical errors. Please contact the helpdesk.",
             "is_finished": True
-        }
+        })
 
 
 @router.post(
@@ -149,9 +188,7 @@ async def resolve(
     document_processor: BaseDocumentProcessor = Depends(get_document_processor),
     transcriber: AudioTranscriber = Depends(get_transcriber),
     client: OpenAI = Depends(get_openai_client)
-):
-    # TODO: Call the agent
-
+) -> ResolveResponse:
     if request_type == RequestType.VOICE_REQUEST:
         logger.info(f'Received CV {request_value.filename}')
 
@@ -161,7 +198,10 @@ async def resolve(
             # Call transcriber
             message = transcriber.transcribe(document_path)
         except Exception as e:
-            return {"response": f"Error transcribing audio: {str(e)}"}
+            return ResolveResponse.model_validate({
+                "text": f"Error transcribing audio: {str(e)}",
+                "is_finished": False
+            })
     else:
         message = request_value
 
@@ -171,14 +211,20 @@ async def resolve(
     messages = [{"role": "system", "content": system_prompt}, *conversation_history]
 
     # Get response using the chat function
-    response: dict = chat_with_openai(
+    response: ResolveResponse = chat_with_openai(
         messages,
         client,
         config.env_param('OPENAI_MODEL')
     )
 
     # Add assistant response to history
-    conversation_history.append({"role": "assistant", "content": response["response"]})
+    conversation_history.append({"role": "assistant", "content": response.text})
+
+    if request_type == RequestType.VOICE_REQUEST:
+        try:
+            synthesize_response_voice(response)
+        except Exception as e:
+            logger.error(f"Error synthesizing voice: {str(e)}")
 
     return response
 
@@ -189,3 +235,18 @@ async def resolve(
 def close_conversation():
     conversation_history.clear()
     return {"status": "Conversation history cleared."}
+
+
+@router.get("/voice-repsonse/download")
+def download_file(
+        file_path: str
+):
+    current_dir = Path.cwd()
+    if os.path.exists(str(current_dir) + file_path):
+        return FileResponse(
+            path=str(current_dir) + file_path,
+            filename="voice.wav",  # download name
+            media_type="audio/wav"  # optional: correct MIME type
+        )
+    return {"error": "File not found"}
+
